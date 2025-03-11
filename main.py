@@ -4,8 +4,6 @@ import os
 import zipfile
 import tempfile
 from io import BytesIO
-from PIL import Image
-import imageio
 
 def extract_frames(video_path, output_dir, frame_interval=30):
     cap = cv2.VideoCapture(video_path)
@@ -36,17 +34,24 @@ def create_zip_from_frames(output_dir):
     zip_buffer.seek(0)
     return zip_buffer
 
-def generate_prompts_from_frames(output_dir):
-    prompts = []
-    for frame_name in sorted(os.listdir(output_dir)):
-        frame_path = os.path.join(output_dir, frame_name)
-        image = Image.open(frame_path)
-        # Dummy analysis: In a real scenario, you might use an image captioning model here
-        description = "A frame showing a scene with various elements."
-        prompts.append(f"Frame {frame_name}: {description}")
-    return "\n".join(prompts)
+def generate_narrative_prompt(output_dir):
+    # Placeholder for frame analysis and prompt generation
+    # This is a simplistic example. In practice, you might use image processing or AI to analyze the frames.
+    frames = sorted([os.path.join(output_dir, f) for f in os.listdir(output_dir) if f.endswith('.png')])
+    prompt_parts = []
+    
+    for frame in frames:
+        # Example analysis (very basic)
+        img = cv2.imread(frame)
+        # Here you could add image processing to detect motion, objects, etc.
+        # For now, we'll just add a generic description
+        prompt_parts.append("A scene with dynamic movement and subtle changes in posture and environment.")
 
-st.title("Video Frame Extractor and Prompt Generator")
+    # Combine all parts into a cohesive narrative
+    full_prompt = " ".join(prompt_parts)
+    return full_prompt
+
+st.title("Video Frame Extractor and Narrative Prompt Generator")
 uploaded_file = st.file_uploader("Upload a video file", type=["mp4", "avi", "mkv", "mov", "wmv", "flv", "webm", "mpeg", "mpg"])
 frame_interval = st.number_input("Frame Interval", min_value=1, value=30, step=1)
 
@@ -63,9 +68,8 @@ if uploaded_file is not None:
             st.success(f"Extraction complete! {frame_count} frames extracted.")
             st.download_button("Download ZIP", zip_buffer, file_name="frames.zip", mime="application/zip")
             
-            # Generate and display prompts
-            prompts = generate_prompts_from_frames(output_dir)
-            st.text_area("Generated Prompts for Text-to-Video", prompts, height=300)
-            st.download_button("Download Prompts as TXT", prompts.encode('utf-8'), file_name="prompts.txt", mime="text/plain")
+            # Generate and display the narrative prompt
+            narrative_prompt = generate_narrative_prompt(output_dir)
+            st.text_area("Generated Narrative Prompt", narrative_prompt, height=300)
         else:
             st.error("No frames extracted. Try a different interval or video file.")
