@@ -6,7 +6,7 @@ import io
 import tempfile
 import os
 from pydub import AudioSegment
-from pydub.effects import crossfade
+from pydub.effects import crossfade_inout  # Perbaikan import
 import matplotlib.pyplot as plt
 
 def create_smooth_loop(audio_data, sample_rate, target_duration_minutes, crossfade_duration=500):
@@ -280,5 +280,5 @@ def main():
         if st.button("Coba dengan audio sample (akan di-generate)"):
             st.info("Fitur demo membutuhkan integrasi dengan audio sample. Upload file Anda sendiri untuk mencoba!")
 
-if __name__ == "_main_":
+if __name__ == "__main__":  # Perbaikan typo
     main()
