@@ -6,7 +6,6 @@ import io
 import tempfile
 import os
 from pydub import AudioSegment
-from pydub.effects import crossfade_inout  # Perbaikan import
 import matplotlib.pyplot as plt
 
 def create_smooth_loop(audio_data, sample_rate, target_duration_minutes, crossfade_duration=500):
@@ -40,9 +39,6 @@ def create_smooth_loop(audio_data, sample_rate, target_duration_minutes, crossfa
         # Gunakan crossfade untuk transisi yang smooth
         looped_audio = looped_audio.append(audio_segment, crossfade=crossfade_duration)
         
-        # Progress bar update
-        progress = min((i + 1) / num_loops, 1.0)
-        
     # Potong ke durasi yang tepat
     final_audio = looped_audio[:target_duration_ms]
     
@@ -59,9 +55,13 @@ def analyze_audio_features(audio_data, sample_rate):
     features['spectral_centroid'] = librosa.feature.spectral_centroid(y=audio_data, sr=sample_rate)[0]
     
     # Temukan beat locations untuk transisi yang natural
-    tempo, beat_frames = librosa.beat.beat_track(y=audio_data, sr=sample_rate)
-    features['tempo'] = tempo
-    features['beat_frames'] = beat_frames
+    try:
+        tempo, beat_frames = librosa.beat.beat_track(y=audio_data, sr=sample_rate)
+        features['tempo'] = tempo
+        features['beat_frames'] = beat_frames
+    except:
+        features['tempo'] = 120
+        features['beat_frames'] = []
     
     return features
 
@@ -84,34 +84,21 @@ def find_best_crossfade_duration(audio_features, original_duration):
     if rms_variation > 0.1:  # Banyak variasi volume
         crossfade = min(crossfade + 200, 1000)
     
-    return min(crossfade, original_duration * 0.1)  # Max 10% dari durasi original
+    return min(crossfade, original_duration * 1000 * 0.1)  # Max 10% dari durasi original (dalam ms)
 
-def plot_audio_waveform(original_audio, looped_audio, sample_rate):
+def plot_audio_waveform(original_audio, sample_rate):
     """
-    Plot perbandingan waveform original dan hasil loop
+    Plot waveform audio original
     """
-    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(12, 8))
+    fig, ax = plt.subplots(1, 1, figsize=(10, 4))
     
     # Plot original audio
     time_original = np.linspace(0, len(original_audio) / sample_rate, len(original_audio))
-    ax1.plot(time_original, original_audio, alpha=0.7, color='blue')
-    ax1.set_title('Original Audio Waveform')
-    ax1.set_xlabel('Time (seconds)')
-    ax1.set_ylabel('Amplitude')
-    ax1.grid(True, alpha=0.3)
-    
-    # Plot looped audio (sample saja untuk efisiensi)
-    if len(looped_audio) > sample_rate * 60:  # Jika lebih dari 1 menit, sample
-        display_audio = looped_audio[:sample_rate * 30]  # Tampilkan 30 detik pertama
-    else:
-        display_audio = looped_audio
-        
-    time_looped = np.linspace(0, len(display_audio) / sample_rate, len(display_audio))
-    ax2.plot(time_looped, display_audio, alpha=0.7, color='green')
-    ax2.set_title('Looped Audio Waveform (Sample)')
-    ax2.set_xlabel('Time (seconds)')
-    ax2.set_ylabel('Amplitude')
-    ax2.grid(True, alpha=0.3)
+    ax.plot(time_original, original_audio, alpha=0.7, color='blue')
+    ax.set_title('Original Audio Waveform')
+    ax.set_xlabel('Time (seconds)')
+    ax.set_ylabel('Amplitude')
+    ax.grid(True, alpha=0.3)
     
     plt.tight_layout()
     return fig
@@ -240,7 +227,7 @@ def main():
                     
                     # Visualisasi
                     st.subheader("Audio Visualization")
-                    fig = plot_audio_waveform(audio_data, audio_data, sample_rate)  # Simplified for demo
+                    fig = plot_audio_waveform(audio_data, sample_rate)
                     st.pyplot(fig)
                     
                     # Cleanup
@@ -255,10 +242,10 @@ def main():
         st.markdown("""
         ### 🎯 Cara Menggunakan:
         
-        1. *Upload Audio* - Pilih file audio pendek (disarankan 10-60 detik)
-        2. *Set Duration* - Tentukan durasi akhir yang diinginkan
-        3. *Auto Optimize* - Biarkan sistem menentukan setting terbaik
-        4. *Generate* - Klik tombol untuk membuat loop smooth
+        1. **Upload Audio** - Pilih file audio pendek (disarankan 10-60 detik)
+        2. **Set Duration** - Tentukan durasi akhir yang diinginkan
+        3. **Auto Optimize** - Biarkan sistem menentukan setting terbaik
+        4. **Generate** - Klik tombol untuk membuat loop smooth
         
         ### 💡 Tips untuk Hasil Terbaik:
         
@@ -274,11 +261,6 @@ def main():
         - Forest sounds 🌳
         - Ambient music 🎵
         """)
-        
-        # Example with demo audio
-        st.subheader("Quick Demo")
-        if st.button("Coba dengan audio sample (akan di-generate)"):
-            st.info("Fitur demo membutuhkan integrasi dengan audio sample. Upload file Anda sendiri untuk mencoba!")
 
-if __name__ == "__main__":  # Perbaikan typo
+if __name__ == "__main__":
     main()
