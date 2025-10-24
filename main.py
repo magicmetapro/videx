@@ -280,5 +280,5 @@ def main():
         if st.button("Coba dengan audio sample (akan di-generate)"):
             st.info("Fitur demo membutuhkan integrasi dengan audio sample. Upload file Anda sendiri untuk mencoba!")
 
-if _name_ == "_main_":
+if __name__ == "_main_":
     main()
