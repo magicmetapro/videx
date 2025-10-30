@@ -1,266 +1,245 @@
 import streamlit as st
+import cv2
 import numpy as np
-import librosa
-import soundfile as sf
-import io
 import tempfile
 import os
-from pydub import AudioSegment
-import matplotlib.pyplot as plt
+from PIL import Image, ImageDraw, ImageFont
+import io
 
-def create_smooth_loop(audio_data, sample_rate, target_duration_minutes, crossfade_duration=500):
+def add_text_to_video(input_video_path, output_video_path, text, font_size=50, text_color=(255, 255, 255)):
     """
-    Membuat loop audio yang smooth dengan crossfade
+    Menambahkan teks ke video menggunakan OpenCV
     """
-    # Konversi ke AudioSegment
-    audio_segment = AudioSegment(
-        audio_data.tobytes(),
-        frame_rate=sample_rate,
-        sample_width=audio_data.dtype.itemsize,
-        channels=1 if len(audio_data.shape) == 1 else audio_data.shape[1]
-    )
+    # Buka video
+    cap = cv2.VideoCapture(input_video_path)
     
-    # Durasi target dalam milidetik
-    target_duration_ms = target_duration_minutes * 60 * 1000
-    original_duration_ms = len(audio_segment)
+    # Dapatkan properti video
+    fps = int(cap.get(cv2.CAP_PROP_FPS))
+    width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+    height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
     
-    # Hitung berapa loop yang dibutuhkan
-    num_loops = int(target_duration_ms / original_duration_ms) + 1
+    # Setup video writer
+    fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+    out = cv2.VideoWriter(output_video_path, fourcc, fps, (width, height))
     
-    st.info(f"Original duration: {original_duration_ms/1000:.2f} seconds")
-    st.info(f"Target duration: {target_duration_minutes} minutes ({target_duration_ms/1000:.2f} seconds)")
-    st.info(f"Number of loops needed: {num_loops}")
+    # Split teks menjadi beberapa baris
+    words = text.split()
+    lines = []
+    current_line = []
     
-    # Buat loop pertama
-    looped_audio = audio_segment
+    # Membagi teks menjadi baris-baris (maksimal 5-6 kata per baris)
+    max_words_per_line = 5
+    for word in words:
+        current_line.append(word)
+        if len(current_line) >= max_words_per_line:
+            lines.append(' '.join(current_line))
+            current_line = []
     
-    # Tambahkan loop dengan crossfade
-    for i in range(1, num_loops):
-        # Gunakan crossfade untuk transisi yang smooth
-        looped_audio = looped_audio.append(audio_segment, crossfade=crossfade_duration)
+    if current_line:
+        lines.append(' '.join(current_line))
+    
+    # Tentukan posisi teks (tengah video)
+    text_y_start = height // 2 - (len(lines) * font_size) // 2
+    
+    while True:
+        ret, frame = cap.read()
+        if not ret:
+            break
         
-    # Potong ke durasi yang tepat
-    final_audio = looped_audio[:target_duration_ms]
+        # Konversi frame BGR ke RGB
+        frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        pil_img = Image.fromarray(frame_rgb)
+        draw = ImageDraw.Draw(pil_img)
+        
+        try:
+            # Coba gunakan font Arial, jika tidak ada gunakan font default
+            font = ImageFont.truetype("arial.ttf", font_size)
+        except:
+            try:
+                font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", font_size)
+            except:
+                font = ImageFont.load_default()
+        
+        # Gambar setiap baris teks
+        for i, line in enumerate(lines):
+            # Hitung lebar teks untuk penempatan tengah
+            bbox = draw.textbbox((0, 0), line, font=font)
+            text_width = bbox[2] - bbox[0]
+            text_x = (width - text_width) // 2
+            text_y = text_y_start + i * font_size
+            
+            # Tambahkan shadow untuk readability
+            shadow_color = (0, 0, 0)
+            draw.text((text_x+2, text_y+2), line, font=font, fill=shadow_color)
+            draw.text((text_x, text_y), line, font=font, fill=text_color)
+        
+        # Konversi kembali ke BGR untuk OpenCV
+        frame_bgr = cv2.cvtColor(np.array(pil_img), cv2.COLOR_RGB2BGR)
+        out.write(frame_bgr)
     
-    return final_audio
-
-def analyze_audio_features(audio_data, sample_rate):
-    """
-    Analisis fitur audio untuk optimasi looping
-    """
-    features = {}
-    
-    # Hitung RMS energy untuk detect transisi yang baik
-    features['rms'] = librosa.feature.rms(y=audio_data)[0]
-    features['spectral_centroid'] = librosa.feature.spectral_centroid(y=audio_data, sr=sample_rate)[0]
-    
-    # Temukan beat locations untuk transisi yang natural
-    try:
-        tempo, beat_frames = librosa.beat.beat_track(y=audio_data, sr=sample_rate)
-        features['tempo'] = tempo
-        features['beat_frames'] = beat_frames
-    except:
-        features['tempo'] = 120
-        features['beat_frames'] = []
-    
-    return features
-
-def find_best_crossfade_duration(audio_features, original_duration):
-    """
-    Tentukan durasi crossfade optimal berdasarkan analisis audio
-    """
-    tempo = audio_features.get('tempo', 120)
-    rms_variation = np.std(audio_features.get('rms', [1]))
-    
-    # Logic untuk menentukan crossfade duration
-    if tempo < 80:  # Audio lambat
-        crossfade = 800  # Crossfade lebih panjang
-    elif tempo > 140:  # Audio cepat
-        crossfade = 300  # Crossfade lebih pendek
-    else:
-        crossfade = 500  # Default
-    
-    # Adjust berdasarkan variasi energy
-    if rms_variation > 0.1:  # Banyak variasi volume
-        crossfade = min(crossfade + 200, 1000)
-    
-    return min(crossfade, original_duration * 1000 * 0.1)  # Max 10% dari durasi original (dalam ms)
-
-def plot_audio_waveform(original_audio, sample_rate):
-    """
-    Plot waveform audio original
-    """
-    fig, ax = plt.subplots(1, 1, figsize=(10, 4))
-    
-    # Plot original audio
-    time_original = np.linspace(0, len(original_audio) / sample_rate, len(original_audio))
-    ax.plot(time_original, original_audio, alpha=0.7, color='blue')
-    ax.set_title('Original Audio Waveform')
-    ax.set_xlabel('Time (seconds)')
-    ax.set_ylabel('Amplitude')
-    ax.grid(True, alpha=0.3)
-    
-    plt.tight_layout()
-    return fig
+    cap.release()
+    out.release()
 
 def main():
     st.set_page_config(
-        page_title="Audio Loop Master",
-        page_icon="🎵",
+        page_title="Video Quote Generator",
+        page_icon="🎬",
         layout="wide"
     )
     
-    st.title("🎵 Audio Loop Master")
-    st.markdown("""
-    Ubah audio pendek menjadi panjang dengan looping yang smooth! 
-    Perfect untuk ASMR, ambient sounds, atau background music.
-    """)
+    st.title("🎬 Video Quote Generator")
+    st.markdown("Unggah video background dan tambahkan quotes menarik!")
     
-    # Sidebar untuk settings
-    st.sidebar.header("Settings")
+    # Sidebar untuk pengaturan
+    st.sidebar.header("Pengaturan")
     
-    uploaded_file = st.sidebar.file_uploader(
-        "Upload Audio File", 
-        type=['wav', 'mp3', 'm4a', 'flac', 'ogg'],
-        help="Upload file audio yang ingin di-loop (disarankan: ASMR, ambient sounds)"
+    # Upload video
+    uploaded_video = st.file_uploader(
+        "Pilih video background", 
+        type=['mp4', 'avi', 'mov', 'mkv'],
+        help="Unggah video yang akan dijadikan background"
     )
     
-    target_duration = st.sidebar.slider(
-        "Target Duration (minutes)",
-        min_value=1,
-        max_value=120,
-        value=60,
-        help="Durasi akhir audio yang diinginkan dalam menit"
+    # Input text
+    quote_text = st.text_area(
+        "Masukkan quotes Anda:",
+        placeholder="Tulis quotes inspiratif di sini...",
+        height=100
     )
     
-    auto_optimize = st.sidebar.checkbox(
-        "Auto Optimize Crossfade", 
-        value=True,
-        help="Otomatis menentukan setting terbaik berdasarkan analisis audio"
-    )
+    # Pengaturan tambahan
+    col1, col2 = st.columns(2)
     
-    if not auto_optimize:
-        crossfade_duration = st.sidebar.slider(
-            "Crossfade Duration (ms)",
-            min_value=100,
-            max_value=2000,
-            value=500,
-            step=100,
-            help="Durasi crossfade antara loop (milidetik)"
-        )
-    else:
-        crossfade_duration = 500  # Default
+    with col1:
+        font_size = st.slider("Ukuran font:", 20, 100, 50)
+        text_color = st.color_picker("Warna teks:", "#FFFFFF")
     
-    # Main content
-    if uploaded_file is not None:
-        try:
-            # Load audio file
-            with st.spinner("Loading audio file..."):
-                audio_bytes = uploaded_file.read()
+    with col2:
+        preview_frame = st.slider("Frame preview:", 0, 100, 10)
+    
+    # Konversi warna hex ke RGB
+    rgb_color = tuple(int(text_color.lstrip('#')[i:i+2], 16) for i in (0, 2, 4))
+    
+    if uploaded_video is not None and quote_text:
+        # Simpan video uploaded ke temporary file
+        with tempfile.NamedTemporaryFile(delete=False, suffix='.mp4') as temp_input:
+            temp_input.write(uploaded_video.read())
+            temp_input_path = temp_input.name
+        
+        # Tampilkan preview
+        st.subheader("Preview")
+        
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            st.markdown("**Video Original**")
+            st.video(uploaded_video)
+        
+        with col2:
+            st.markdown("**Preview dengan Text**")
+            
+            # Buat preview dari satu frame
+            cap = cv2.VideoCapture(temp_input_path)
+            total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+            preview_frame_num = min(preview_frame, total_frames-1)
+            
+            cap.set(cv2.CAP_PROP_POS_FRAMES, preview_frame_num)
+            ret, frame = cap.read()
+            
+            if ret:
+                # Proses frame untuk preview
+                frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                pil_img = Image.fromarray(frame_rgb)
+                draw = ImageDraw.Draw(pil_img)
                 
-                # Gunakan temp file untuk processing
-                with tempfile.NamedTemporaryFile(delete=False, suffix='.wav') as tmp_file:
-                    tmp_file.write(audio_bytes)
-                    tmp_path = tmp_file.name
+                # Split text untuk preview
+                words = quote_text.split()
+                lines = []
+                current_line = []
+                max_words_per_line = 5
                 
-                # Load dengan librosa
-                audio_data, sample_rate = librosa.load(tmp_path, sr=None, mono=True)
-                duration_original = len(audio_data) / sample_rate
+                for word in words:
+                    current_line.append(word)
+                    if len(current_line) >= max_words_per_line:
+                        lines.append(' '.join(current_line))
+                        current_line = []
                 
-                # Cleanup temp file
-                os.unlink(tmp_path)
-            
-            # Display original audio info
-            col1, col2, col3 = st.columns(3)
-            with col1:
-                st.metric("Original Duration", f"{duration_original:.2f} seconds")
-            with col2:
-                st.metric("Sample Rate", f"{sample_rate} Hz")
-            with col3:
-                st.metric("Target Duration", f"{target_duration} minutes")
-            
-            # Play original audio
-            st.subheader("Original Audio")
-            st.audio(audio_bytes, format='audio/wav')
-            
-            # Analyze audio features jika auto optimize
-            if auto_optimize:
-                with st.spinner("Analyzing audio for optimal looping..."):
-                    features = analyze_audio_features(audio_data, sample_rate)
-                    crossfade_duration = find_best_crossfade_duration(features, duration_original)
-                    st.sidebar.info(f"Auto Crossfade: {crossfade_duration}ms")
-            
-            # Processing
-            if st.button("🚀 Generate Smooth Loop", type="primary"):
-                with st.spinner(f"Creating {target_duration} minute smooth loop..."):
+                if current_line:
+                    lines.append(' '.join(current_line))
+                
+                height, width = frame.shape[:2]
+                text_y_start = height // 2 - (len(lines) * font_size) // 2
+                
+                try:
+                    font = ImageFont.truetype("arial.ttf", font_size)
+                except:
+                    try:
+                        font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", font_size)
+                    except:
+                        font = ImageFont.load_default()
+                
+                # Gambar teks pada preview
+                for i, line in enumerate(lines):
+                    bbox = draw.textbbox((0, 0), line, font=font)
+                    text_width = bbox[2] - bbox[0]
+                    text_x = (width - text_width) // 2
+                    text_y = text_y_start + i * font_size
                     
-                    # Create smooth loop
-                    looped_audio_segment = create_smooth_loop(
-                        audio_data, 
-                        sample_rate, 
-                        target_duration,
-                        crossfade_duration
-                    )
+                    # Shadow
+                    draw.text((text_x+2, text_y+2), line, font=font, fill=(0, 0, 0))
+                    draw.text((text_x, text_y), line, font=font, fill=rgb_color)
+                
+                # Konversi kembali untuk display
+                preview_frame = cv2.cvtColor(np.array(pil_img), cv2.COLOR_RGB2BGR)
+                
+                # Simpan preview sebagai image temporary
+                with tempfile.NamedTemporaryFile(delete=False, suffix='.jpg') as temp_preview:
+                    cv2.imwrite(temp_preview.name, preview_frame)
+                    st.image(temp_preview.name, use_column_width=True)
+                
+                cap.release()
+        
+        # Tombol untuk memproses video
+        if st.button("🚀 Generate Video dengan Quotes", type="primary"):
+            with st.spinner("Sedang memproses video..."):
+                # Buat output video
+                with tempfile.NamedTemporaryFile(delete=False, suffix='.mp4') as temp_output:
+                    output_path = temp_output.name
+                
+                try:
+                    add_text_to_video(temp_input_path, output_path, quote_text, font_size, rgb_color)
                     
-                    # Convert to bytes untuk Streamlit
-                    with tempfile.NamedTemporaryFile(delete=False, suffix='.wav') as tmp_output:
-                        looped_audio_segment.export(tmp_output.name, format="wav")
-                        
-                        # Baca hasil untuk display
-                        with open(tmp_output.name, 'rb') as f:
-                            looped_audio_bytes = f.read()
+                    # Baca output video
+                    with open(output_path, 'rb') as f:
+                        video_bytes = f.read()
                     
-                    # Display results
-                    st.success(f"✅ Successfully created {target_duration} minute loop!")
-                    
-                    # Tampilkan audio hasil
-                    st.subheader("Looped Audio Result")
-                    st.audio(looped_audio_bytes, format='audio/wav')
+                    # Tampilkan hasil
+                    st.success("✅ Video berhasil dibuat!")
+                    st.subheader("Hasil Video")
+                    st.video(video_bytes)
                     
                     # Download button
                     st.download_button(
-                        label="📥 Download Looped Audio",
-                        data=looped_audio_bytes,
-                        file_name=f"looped_audio_{target_duration}min.wav",
-                        mime="audio/wav"
+                        label="📥 Download Video",
+                        data=video_bytes,
+                        file_name="video_with_quotes.mp4",
+                        mime="video/mp4"
                     )
                     
-                    # Visualisasi
-                    st.subheader("Audio Visualization")
-                    fig = plot_audio_waveform(audio_data, sample_rate)
-                    st.pyplot(fig)
-                    
+                except Exception as e:
+                    st.error(f"Error: {str(e)}")
+                finally:
                     # Cleanup
-                    os.unlink(tmp_output.name)
-        
-        except Exception as e:
-            st.error(f"Error processing audio: {str(e)}")
-            st.info("Pastikan file audio tidak corrupt dan format didukung.")
+                    if os.path.exists(temp_input_path):
+                        os.unlink(temp_input_path)
+                    if os.path.exists(output_path):
+                        os.unlink(output_path)
     
-    else:
-        # Default state - show instructions
-        st.markdown("""
-        ### 🎯 Cara Menggunakan:
-        
-        1. **Upload Audio** - Pilih file audio pendek (disarankan 10-60 detik)
-        2. **Set Duration** - Tentukan durasi akhir yang diinginkan
-        3. **Auto Optimize** - Biarkan sistem menentukan setting terbaik
-        4. **Generate** - Klik tombol untuk membuat loop smooth
-        
-        ### 💡 Tips untuk Hasil Terbaik:
-        
-        - Gunakan audio dengan karakteristik konsisten (ASMR hujan, white noise, dll)
-        - Audio dengan fade in/out natural lebih mudah di-loop
-        - Durasi original 15-30 detik biasanya ideal
-        - Format WAV atau FLAC memberikan kualitas terbaik
-        
-        ### 🎧 Contoh Audio yang Cocok:
-        - Suara hujan 🌧️
-        - White noise 📻  
-        - Ocean waves 🌊
-        - Forest sounds 🌳
-        - Ambient music 🎵
-        """)
+    elif uploaded_video is None:
+        st.info("📁 Silakan unggah video background terlebih dahulu")
+    
+    elif not quote_text:
+        st.info("✍️ Silakan masukkan quotes terlebih dahulu")
 
 if __name__ == "__main__":
     main()
