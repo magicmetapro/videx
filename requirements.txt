@@ -5,3 +5,5 @@ soundfile
 pydub
 matplotlib
 scipy
+opencv-python
+pillow
