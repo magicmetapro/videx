@@ -1,84 +1,85 @@
 import streamlit as st
-import cv2
-import numpy as np
 import tempfile
 import os
+from moviepy.editor import VideoFileClip, TextClip, CompositeVideoClip
 from PIL import Image, ImageDraw, ImageFont
-import io
+import base64
 
-def add_text_to_video(input_video_path, output_video_path, text, font_size=50, text_color=(255, 255, 255)):
+def add_text_to_video_moviepy(input_video_path, output_video_path, text, font_size=50, text_color='white'):
     """
-    Menambahkan teks ke video menggunakan OpenCV
+    Menambahkan teks ke video menggunakan MoviePy
     """
-    # Buka video
-    cap = cv2.VideoCapture(input_video_path)
-    
-    # Dapatkan properti video
-    fps = int(cap.get(cv2.CAP_PROP_FPS))
-    width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-    height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-    
-    # Setup video writer
-    fourcc = cv2.VideoWriter_fourcc(*'mp4v')
-    out = cv2.VideoWriter(output_video_path, fourcc, fps, (width, height))
-    
-    # Split teks menjadi beberapa baris
-    words = text.split()
-    lines = []
-    current_line = []
-    
-    # Membagi teks menjadi baris-baris (maksimal 5-6 kata per baris)
-    max_words_per_line = 5
-    for word in words:
-        current_line.append(word)
-        if len(current_line) >= max_words_per_line:
+    try:
+        # Load video
+        video = VideoFileClip(input_video_path)
+        
+        # Split text into lines
+        words = text.split()
+        lines = []
+        current_line = []
+        max_words_per_line = 4
+        
+        for word in words:
+            current_line.append(word)
+            if len(current_line) >= max_words_per_line:
+                lines.append(' '.join(current_line))
+                current_line = []
+        
+        if current_line:
             lines.append(' '.join(current_line))
-            current_line = []
-    
-    if current_line:
-        lines.append(' '.join(current_line))
-    
-    # Tentukan posisi teks (tengah video)
-    text_y_start = height // 2 - (len(lines) * font_size) // 2
-    
-    while True:
-        ret, frame = cap.read()
-        if not ret:
-            break
         
-        # Konversi frame BGR ke RGB
-        frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        pil_img = Image.fromarray(frame_rgb)
-        draw = ImageDraw.Draw(pil_img)
+        # Create text clips for each line
+        text_clips = []
+        duration = video.duration
         
-        try:
-            # Coba gunakan font Arial, jika tidak ada gunakan font default
-            font = ImageFont.truetype("arial.ttf", font_size)
-        except:
-            try:
-                font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", font_size)
-            except:
-                font = ImageFont.load_default()
-        
-        # Gambar setiap baris teks
         for i, line in enumerate(lines):
-            # Hitung lebar teks untuk penempatan tengah
-            bbox = draw.textbbox((0, 0), line, font=font)
-            text_width = bbox[2] - bbox[0]
-            text_x = (width - text_width) // 2
-            text_y = text_y_start + i * font_size
+            txt_clip = TextClip(
+                line, 
+                fontsize=font_size, 
+                color=text_color,
+                font='Arial-Bold',
+                stroke_color='black',
+                stroke_width=2
+            )
             
-            # Tambahkan shadow untuk readability
-            shadow_color = (0, 0, 0)
-            draw.text((text_x+2, text_y+2), line, font=font, fill=shadow_color)
-            draw.text((text_x, text_y), line, font=font, fill=text_color)
+            # Position text in the center
+            txt_clip = txt_clip.set_position(('center', f'center-{len(lines)*font_size//2 - i*font_size}'))
+            txt_clip = txt_clip.set_duration(duration)
+            text_clips.append(txt_clip)
         
-        # Konversi kembali ke BGR untuk OpenCV
-        frame_bgr = cv2.cvtColor(np.array(pil_img), cv2.COLOR_RGB2BGR)
-        out.write(frame_bgr)
-    
-    cap.release()
-    out.release()
+        # Combine video and text
+        final_video = CompositeVideoClip([video] + text_clips)
+        
+        # Write output video
+        final_video.write_videofile(
+            output_video_path, 
+            codec='libx264',
+            audio_codec='aac',
+            temp_audiofile='temp-audio.m4a',
+            remove_temp=True
+        )
+        
+        # Close clips to free memory
+        video.close()
+        final_video.close()
+        for clip in text_clips:
+            clip.close()
+            
+        return True
+        
+    except Exception as e:
+        st.error(f"Error in video processing: {str(e)}")
+        return False
+
+def get_video_duration(video_path):
+    """Get video duration using moviepy"""
+    try:
+        video = VideoFileClip(video_path)
+        duration = video.duration
+        video.close()
+        return duration
+    except:
+        return 0
 
 def main():
     st.set_page_config(
@@ -96,15 +97,16 @@ def main():
     # Upload video
     uploaded_video = st.file_uploader(
         "Pilih video background", 
-        type=['mp4', 'avi', 'mov', 'mkv'],
-        help="Unggah video yang akan dijadikan background"
+        type=['mp4', 'mov', 'avi'],
+        help="Unggah video yang akan dijadikan background (format MP4, MOV, AVI)"
     )
     
     # Input text
     quote_text = st.text_area(
         "Masukkan quotes Anda:",
         placeholder="Tulis quotes inspiratif di sini...",
-        height=100
+        height=100,
+        max_chars=200
     )
     
     # Pengaturan tambahan
@@ -115,131 +117,102 @@ def main():
         text_color = st.color_picker("Warna teks:", "#FFFFFF")
     
     with col2:
-        preview_frame = st.slider("Frame preview:", 0, 100, 10)
+        st.info("💡 Tips: Gunakan quotes pendek untuk hasil terbaik")
     
-    # Konversi warna hex ke RGB
-    rgb_color = tuple(int(text_color.lstrip('#')[i:i+2], 16) for i in (0, 2, 4))
+    # Contoh quotes
+    with st.expander("📝 Contoh Quotes"):
+        example_quotes = [
+            "The only way to do great work is to love what you do. - Steve Jobs",
+            "Innovation distinguishes between a leader and a follower. - Steve Jobs",
+            "Life is what happens when you're busy making other plans. - John Lennon",
+            "The future belongs to those who believe in the beauty of their dreams. - Eleanor Roosevelt"
+        ]
+        for quote in example_quotes:
+            if st.button(quote, key=quote):
+                quote_text = quote
     
     if uploaded_video is not None and quote_text:
-        # Simpan video uploaded ke temporary file
+        # Display original video
+        st.subheader("Video Original")
+        st.video(uploaded_video)
+        
+        # Show video info
         with tempfile.NamedTemporaryFile(delete=False, suffix='.mp4') as temp_input:
             temp_input.write(uploaded_video.read())
             temp_input_path = temp_input.name
         
-        # Tampilkan preview
-        st.subheader("Preview")
+        duration = get_video_duration(temp_input_path)
+        if duration > 0:
+            st.info(f"Durasi video: {duration:.2f} detik")
         
-        col1, col2 = st.columns(2)
-        
-        with col1:
-            st.markdown("**Video Original**")
-            st.video(uploaded_video)
-        
-        with col2:
-            st.markdown("**Preview dengan Text**")
-            
-            # Buat preview dari satu frame
-            cap = cv2.VideoCapture(temp_input_path)
-            total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-            preview_frame_num = min(preview_frame, total_frames-1)
-            
-            cap.set(cv2.CAP_PROP_POS_FRAMES, preview_frame_num)
-            ret, frame = cap.read()
-            
-            if ret:
-                # Proses frame untuk preview
-                frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                pil_img = Image.fromarray(frame_rgb)
-                draw = ImageDraw.Draw(pil_img)
-                
-                # Split text untuk preview
-                words = quote_text.split()
-                lines = []
-                current_line = []
-                max_words_per_line = 5
-                
-                for word in words:
-                    current_line.append(word)
-                    if len(current_line) >= max_words_per_line:
-                        lines.append(' '.join(current_line))
-                        current_line = []
-                
-                if current_line:
-                    lines.append(' '.join(current_line))
-                
-                height, width = frame.shape[:2]
-                text_y_start = height // 2 - (len(lines) * font_size) // 2
-                
-                try:
-                    font = ImageFont.truetype("arial.ttf", font_size)
-                except:
-                    try:
-                        font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", font_size)
-                    except:
-                        font = ImageFont.load_default()
-                
-                # Gambar teks pada preview
-                for i, line in enumerate(lines):
-                    bbox = draw.textbbox((0, 0), line, font=font)
-                    text_width = bbox[2] - bbox[0]
-                    text_x = (width - text_width) // 2
-                    text_y = text_y_start + i * font_size
-                    
-                    # Shadow
-                    draw.text((text_x+2, text_y+2), line, font=font, fill=(0, 0, 0))
-                    draw.text((text_x, text_y), line, font=font, fill=rgb_color)
-                
-                # Konversi kembali untuk display
-                preview_frame = cv2.cvtColor(np.array(pil_img), cv2.COLOR_RGB2BGR)
-                
-                # Simpan preview sebagai image temporary
-                with tempfile.NamedTemporaryFile(delete=False, suffix='.jpg') as temp_preview:
-                    cv2.imwrite(temp_preview.name, preview_frame)
-                    st.image(temp_preview.name, use_column_width=True)
-                
-                cap.release()
-        
-        # Tombol untuk memproses video
+        # Processing button
         if st.button("🚀 Generate Video dengan Quotes", type="primary"):
-            with st.spinner("Sedang memproses video..."):
-                # Buat output video
+            if len(quote_text.strip()) < 5:
+                st.warning("Quotes terlalu pendek. Minimal 5 karakter.")
+                return
+            
+            with st.spinner("Sedang memproses video... Ini mungkin membutuhkan beberapa saat"):
+                # Create output video
                 with tempfile.NamedTemporaryFile(delete=False, suffix='.mp4') as temp_output:
                     output_path = temp_output.name
                 
                 try:
-                    add_text_to_video(temp_input_path, output_path, quote_text, font_size, rgb_color)
-                    
-                    # Baca output video
-                    with open(output_path, 'rb') as f:
-                        video_bytes = f.read()
-                    
-                    # Tampilkan hasil
-                    st.success("✅ Video berhasil dibuat!")
-                    st.subheader("Hasil Video")
-                    st.video(video_bytes)
-                    
-                    # Download button
-                    st.download_button(
-                        label="📥 Download Video",
-                        data=video_bytes,
-                        file_name="video_with_quotes.mp4",
-                        mime="video/mp4"
+                    success = add_text_to_video_moviepy(
+                        temp_input_path, 
+                        output_path, 
+                        quote_text, 
+                        font_size, 
+                        text_color
                     )
                     
+                    if success and os.path.exists(output_path):
+                        # Display result
+                        st.success("✅ Video berhasil dibuat!")
+                        st.subheader("Hasil Video dengan Quotes")
+                        
+                        # Read and display video
+                        with open(output_path, 'rb') as f:
+                            video_bytes = f.read()
+                        
+                        st.video(video_bytes)
+                        
+                        # Download button
+                        st.download_button(
+                            label="📥 Download Video",
+                            data=video_bytes,
+                            file_name="video_quotes.mp4",
+                            mime="video/mp4",
+                            type="primary"
+                        )
+                    else:
+                        st.error("Gagal membuat video. Silakan coba dengan video atau teks yang berbeda.")
+                        
                 except Exception as e:
-                    st.error(f"Error: {str(e)}")
+                    st.error(f"Terjadi error: {str(e)}")
+                    st.info("💡 Tips: Coba dengan video yang lebih pendek atau teks yang lebih sederhana")
+                
                 finally:
                     # Cleanup
-                    if os.path.exists(temp_input_path):
-                        os.unlink(temp_input_path)
-                    if os.path.exists(output_path):
-                        os.unlink(output_path)
+                    try:
+                        if os.path.exists(temp_input_path):
+                            os.unlink(temp_input_path)
+                        if os.path.exists(output_path):
+                            os.unlink(output_path)
+                    except:
+                        pass
     
     elif uploaded_video is None:
         st.info("📁 Silakan unggah video background terlebih dahulu")
     
     elif not quote_text:
         st.info("✍️ Silakan masukkan quotes terlebih dahulu")
+
+    # Footer
+    st.markdown("---")
+    st.markdown(
+        "Dibuat dengan ❤️ menggunakan Streamlit dan MoviePy | "
+        "Video Quote Generator v1.0"
+    )
 
 if __name__ == "__main__":
     main()
