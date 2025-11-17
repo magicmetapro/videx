@@ -8,3 +8,4 @@ scipy
 opencv-python
 pillow
 moviepy
+opencv
