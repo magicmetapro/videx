@@ -5,7 +5,6 @@ soundfile
 pydub
 matplotlib
 scipy
-opencv-python
+opencv-python-headless
 pillow
 moviepy
-opencv
