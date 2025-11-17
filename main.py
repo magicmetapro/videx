@@ -169,7 +169,7 @@ if uploaded_file is not None:
                 
                 # Opsi format JPEG dengan kualitas tinggi
                 buffer_jpeg = BytesIO()
-                pil_image.save(buffer_jpeg, format="JPEG", quality=95)
+                pil_image.save(buffer_jpeg, format="JPEG", quality=100)
                 buffer_jpeg.seek(0)
                 
                 st.download_button(
